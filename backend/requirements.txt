@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-dotenv
+pandas
+requests
+numpy
+jinja2
+markdown
+python-multipart
