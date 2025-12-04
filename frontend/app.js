@@ -140,7 +140,7 @@ function App() {
                             `}
 
                             ${activeTab === 'report' && html`
-                                <${ReportCard} reportPath=${scanResult.report_path} analysis=${scanResult.analysis} />
+                                <${ReportCard} reportPath=${scanResult.report_path} analysis=${scanResult.analysis} scanId=${scanResult.scan_id} />
                             `}
 
                             ${activeTab === 'fixit' && html`

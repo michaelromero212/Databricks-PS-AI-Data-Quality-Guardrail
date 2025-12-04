@@ -86,6 +86,24 @@ async def get_table_info(catalog_name: str, schema_name: str, table_name: str):
     return DatabricksCLI.get_table_info(catalog_name, schema_name, table_name)
 
 
+@app.get("/api/report/{scan_id}")
+async def get_report(scan_id: str):
+    """Get the markdown report for a scan."""
+    from fastapi.responses import PlainTextResponse
+    
+    if scan_id not in scans:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    
+    scan_data = scans[scan_id]
+    report_path = scan_data.get("report_path", "")
+    
+    if report_path and os.path.exists(report_path):
+        with open(report_path, 'r') as f:
+            return PlainTextResponse(f.read())
+    
+    raise HTTPException(status_code=404, detail="Report not found")
+
+
 @app.post("/api/scan")
 async def run_scan(request: ScanRequest):
     scan_id = str(uuid.uuid4())
