@@ -81,6 +81,24 @@ View comprehensive table metadata including column names, data types, and nullab
 
 ---
 
+### Scan Results Dashboard
+Immediate feedback on data quality with a calculated DQ Score (0-100), issue severity distribution, and identified anomalies.
+
+![Scan Results](docs/images/06_scan_results.jpg)
+
+*Visualizes the health of your data at a glance. The severity chart helps prioritize which issues need immediate attention.*
+
+---
+
+### AI Assessment Report
+A comprehensive, auto-generated report that explains *why* issues occurred and *how* to fix them.
+
+![AI Report](docs/images/07_scan_report.jpg)
+
+*Includes an executive summary, pipeline health status, root cause analysis, and copy-pasteable SQL/Python code snippets for remediation.*
+
+---
+
 ## 🏗️ Tech Stack
 
 ### Backend
