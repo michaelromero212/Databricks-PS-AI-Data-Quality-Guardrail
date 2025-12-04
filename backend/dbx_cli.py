@@ -108,7 +108,15 @@ class DatabricksCLI:
         Returns:
             dict with 'success' or 'error'
         """
-        logger.info(f"Uploading notebook from {local_path} to {workspace_path}")
+        import os as os_module
+        # Convert to absolute path if relative
+        abs_local_path = os_module.path.abspath(local_path)
+        logger.info(f"Uploading notebook from {abs_local_path} to {workspace_path}")
+        
+        # Create parent directory if it doesn't exist
+        parent_dir = os_module.path.dirname(workspace_path)
+        if parent_dir:
+            DatabricksCLI.run_command(["workspace", "mkdirs", parent_dir])
         
         # Use 'workspace import' command
         # -l PYTHON for language, -f SOURCE for format, -o for overwrite
@@ -117,7 +125,7 @@ class DatabricksCLI:
             "-l", "PYTHON",
             "-f", "SOURCE",
             "-o",
-            local_path,
+            abs_local_path,
             workspace_path
         ])
         
@@ -134,7 +142,8 @@ class DatabricksCLI:
     def list_catalogs():
         """Lists all catalogs in Unity Catalog."""
         logger.info("Listing Unity Catalog catalogs...")
-        res = DatabricksCLI.run_command(["unity-catalog", "catalogs", "list", "--output", "JSON"])
+        # Legacy CLI (v0.18) outputs JSON by default
+        res = DatabricksCLI.run_command(["unity-catalog", "catalogs", "list"])
         
         if "error" in res:
             # Fall back to mock data for demo
@@ -160,8 +169,7 @@ class DatabricksCLI:
         logger.info(f"Listing schemas in catalog: {catalog_name}")
         res = DatabricksCLI.run_command([
             "unity-catalog", "schemas", "list",
-            "--catalog-name", catalog_name,
-            "--output", "JSON"
+            "--catalog-name", catalog_name
         ])
         
         if "error" in res:
@@ -197,8 +205,7 @@ class DatabricksCLI:
         res = DatabricksCLI.run_command([
             "unity-catalog", "tables", "list",
             "--catalog-name", catalog_name,
-            "--schema-name", schema_name,
-            "--output", "JSON"
+            "--schema-name", schema_name
         ])
         
         if "error" in res:
@@ -246,10 +253,10 @@ class DatabricksCLI:
         full_name = f"{catalog_name}.{schema_name}.{table_name}"
         logger.info(f"Getting table info for: {full_name}")
         
+        # Legacy CLI requires --full-name flag
         res = DatabricksCLI.run_command([
             "unity-catalog", "tables", "get",
-            "--full-name", full_name,
-            "--output", "JSON"
+            "--full-name", full_name
         ])
         
         if "error" in res:
