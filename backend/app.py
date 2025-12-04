@@ -115,29 +115,50 @@ async def run_scan(request: ScanRequest):
             df = pd.read_csv("data/sample.csv")
             logger.info("Using local sample.csv for scan")
         elif request.type == "table":
-            # Query Unity Catalog table via SQL
-            logger.info(f"Querying Unity Catalog table: {request.path}")
+            # Use push-down SQL analysis - compute metrics directly on Databricks
+            logger.info(f"Running push-down SQL analysis on: {request.path}")
             
-            # Query a sample of the table (limit to 1000 rows for performance)
-            query = f"SELECT * FROM {request.path} LIMIT 1000"
-            result = DatabricksCLI.run_sql(query)
-            
-            if "error" in result:
-                logger.warning(f"SQL query failed: {result['error']}. Falling back to sample data.")
+            # Parse table name to get catalog, schema, table
+            parts = request.path.split(".")
+            if len(parts) != 3:
+                logger.warning(f"Invalid table path format: {request.path}. Expected catalog.schema.table")
                 df = pd.read_csv("data/sample.csv")
-            elif "data_array" in result and "manifest" in result:
-                # Parse the SQL result into a DataFrame
-                columns = [col["name"] for col in result.get("manifest", {}).get("schema", {}).get("columns", [])]
-                data = result.get("data_array", [])
-                if columns and data:
-                    df = pd.DataFrame(data, columns=columns)
-                    logger.info(f"Successfully loaded {len(df)} rows with {len(columns)} columns from {request.path}")
-                else:
-                    logger.warning(f"SQL result was empty (cols={len(columns)}, rows={len(data) if data else 0}), using sample data")
-                    df = pd.read_csv("data/sample.csv")
             else:
-                logger.warning(f"Unexpected SQL response format, using sample data. Response keys: {list(result.keys())}")
-                df = pd.read_csv("data/sample.csv")
+                catalog, schema, table = parts
+                
+                # Get table schema first
+                table_info = DatabricksCLI.get_table_info(catalog, schema, table)
+                
+                if "error" in table_info or table_info.get("mock"):
+                    logger.warning(f"Could not get table info: {table_info.get('error', 'using mock')}. Falling back to sample data.")
+                    df = pd.read_csv("data/sample.csv")
+                else:
+                    columns = table_info.get("columns", [])
+                    if not columns:
+                        logger.warning("No columns found in table info. Falling back to sample data.")
+                        df = pd.read_csv("data/sample.csv")
+                    else:
+                        # Generate aggregation SQL
+                        analysis_sql = DQChecks.generate_sql_analysis(request.path, columns)
+                        logger.info(f"Executing push-down SQL:\n{analysis_sql[:500]}...")
+                        
+                        # Execute the SQL
+                        sql_result = DatabricksCLI.run_sql(analysis_sql)
+                        
+                        if "error" in sql_result:
+                            logger.warning(f"Push-down SQL failed: {sql_result['error']}. Falling back to sample data.")
+                            df = pd.read_csv("data/sample.csv")
+                        else:
+                            # Parse results using push-down parser
+                            dq_results = DQChecks.parse_sql_results(sql_result, columns, request.path)
+                            
+                            if "error" in dq_results:
+                                logger.warning(f"Failed to parse SQL results: {dq_results['error']}. Falling back to sample data.")
+                                df = pd.read_csv("data/sample.csv")
+                            else:
+                                # Success! Skip the Pandas analysis path
+                                df = None  # Signal that we used push-down
+                                logger.info(f"Push-down analysis successful: {dq_results['row_count']:,} rows analyzed")
         elif request.path.startswith("dbfs:"):
             # Try to read from DBFS
             logger.info(f"Attempting to read DBFS path: {request.path}")
@@ -154,12 +175,13 @@ async def run_scan(request: ScanRequest):
             logger.info(f"Unknown path type '{request.path}', using sample data")
             df = pd.read_csv("data/sample.csv")
 
-        # Run Checks
-        dq_results = DQChecks.analyze_dataframe(df)
-        
-        # Add source info to results
-        dq_results["source"] = request.path
-        dq_results["source_type"] = request.type
+        # Run Checks - only if we didn't use push-down SQL
+        if df is not None:
+            dq_results = DQChecks.analyze_dataframe(df)
+            # Add source info to results
+            dq_results["source"] = request.path
+            dq_results["source_type"] = request.type
+        # else: dq_results was already set by push-down SQL path
         
         # Run AI Analysis
         ai_analysis = AIAnalyzer.analyze_issues(dq_results)
