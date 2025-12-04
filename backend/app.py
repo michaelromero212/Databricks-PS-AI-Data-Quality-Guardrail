@@ -107,24 +107,59 @@ async def get_report(scan_id: str):
 @app.post("/api/scan")
 async def run_scan(request: ScanRequest):
     scan_id = str(uuid.uuid4())
+    df = None
     
     try:
         # For demo purposes, if path is 'sample', use local sample data
         if request.path == "sample":
             df = pd.read_csv("data/sample.csv")
-        else:
-            # In real app, download from DBFS or query table
-            # Here we mock it or try to read if local
-            if request.path.startswith("dbfs:"):
-                # head = DatabricksCLI.read_head(request.path)
-                # df = pd.read_csv(io.StringIO(head)) # Simplified
-                # For this demo, we'll just use the sample data if DBFS fails or is not configured
-                df = pd.read_csv("data/sample.csv") 
-            else:
+            logger.info("Using local sample.csv for scan")
+        elif request.type == "table":
+            # Query Unity Catalog table via SQL
+            logger.info(f"Querying Unity Catalog table: {request.path}")
+            
+            # Query a sample of the table (limit to 1000 rows for performance)
+            query = f"SELECT * FROM {request.path} LIMIT 1000"
+            result = DatabricksCLI.run_sql(query)
+            
+            if "error" in result:
+                logger.warning(f"SQL query failed: {result['error']}. Falling back to sample data.")
                 df = pd.read_csv("data/sample.csv")
+            elif "data_array" in result and "manifest" in result:
+                # Parse the SQL result into a DataFrame
+                columns = [col["name"] for col in result.get("manifest", {}).get("schema", {}).get("columns", [])]
+                data = result.get("data_array", [])
+                if columns and data:
+                    df = pd.DataFrame(data, columns=columns)
+                    logger.info(f"Successfully loaded {len(df)} rows with {len(columns)} columns from {request.path}")
+                else:
+                    logger.warning(f"SQL result was empty (cols={len(columns)}, rows={len(data) if data else 0}), using sample data")
+                    df = pd.read_csv("data/sample.csv")
+            else:
+                logger.warning(f"Unexpected SQL response format, using sample data. Response keys: {list(result.keys())}")
+                df = pd.read_csv("data/sample.csv")
+        elif request.path.startswith("dbfs:"):
+            # Try to read from DBFS
+            logger.info(f"Attempting to read DBFS path: {request.path}")
+            head = DatabricksCLI.read_head(request.path)
+            if isinstance(head, dict) and "error" in head:
+                logger.warning(f"DBFS read failed: {head['error']}. Falling back to sample data.")
+                df = pd.read_csv("data/sample.csv")
+            else:
+                import io
+                df = pd.read_csv(io.StringIO(head))
+                logger.info(f"Successfully loaded from DBFS: {request.path}")
+        else:
+            # Default fallback to sample data
+            logger.info(f"Unknown path type '{request.path}', using sample data")
+            df = pd.read_csv("data/sample.csv")
 
         # Run Checks
         dq_results = DQChecks.analyze_dataframe(df)
+        
+        # Add source info to results
+        dq_results["source"] = request.path
+        dq_results["source_type"] = request.type
         
         # Run AI Analysis
         ai_analysis = AIAnalyzer.analyze_issues(dq_results)

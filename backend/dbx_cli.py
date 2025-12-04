@@ -69,28 +69,75 @@ class DatabricksCLI:
 
     @staticmethod
     def run_sql(query):
-        """Runs a SQL query using the Warehouse."""
+        """Runs a SQL query using the Warehouse via REST API."""
+        import requests
+        import time
+        
         warehouse_id = config["warehouse_id"]
+        host = config["host"]
+        token = config["token"]
+        
         if not warehouse_id:
             return {"error": "Warehouse ID not configured"}
+        if not host or not token:
+            return {"error": "Databricks host or token not configured"}
         
         logger.info(f"Running SQL: {query}")
-        # Using the SQL execution API via CLI if available, or just generic command
-        # 'databricks sql query' is a valid command in newer CLI
-        res = DatabricksCLI.run_command([
-            "sql", "query", 
-            "--warehouse-id", warehouse_id, 
-            "--query", query,
-            "--format", "JSON"
-        ])
         
-        if "error" in res:
-            return res
-            
+        # Use the SQL Statement Execution API
+        url = f"{host}/api/2.0/sql/statements"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "warehouse_id": warehouse_id,
+            "statement": query,
+            "wait_timeout": "30s",  # Wait up to 30 seconds for results
+            "on_wait_timeout": "CONTINUE"  # Continue if query takes longer
+        }
+        
         try:
-            return json.loads(res["output"])
-        except json.JSONDecodeError:
-            return {"output": res["output"], "warning": "Could not parse JSON output"}
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+            result = response.json()
+            
+            # Check if we need to poll for results
+            status = result.get("status", {}).get("state", "")
+            statement_id = result.get("statement_id", "")
+            
+            # Poll for completion if still running
+            poll_count = 0
+            while status in ["PENDING", "RUNNING"] and poll_count < 30:
+                time.sleep(2)
+                poll_url = f"{host}/api/2.0/sql/statements/{statement_id}"
+                poll_response = requests.get(poll_url, headers=headers, timeout=30)
+                poll_response.raise_for_status()
+                result = poll_response.json()
+                status = result.get("status", {}).get("state", "")
+                poll_count += 1
+                logger.info(f"SQL query status: {status} (poll {poll_count})")
+            
+            if status == "FAILED":
+                error_msg = result.get("status", {}).get("error", {}).get("message", "Unknown error")
+                return {"error": f"SQL query failed: {error_msg}"}
+            
+            if status != "SUCCEEDED":
+                return {"error": f"SQL query did not complete. Status: {status}"}
+            
+            # Extract the data
+            manifest = result.get("manifest", {})
+            data_array = result.get("result", {}).get("data_array", [])
+            
+            return {
+                "manifest": manifest,
+                "data_array": data_array,
+                "row_count": len(data_array)
+            }
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"SQL API request failed: {e}")
+            return {"error": str(e)}
 
     @staticmethod
     def check_connection():
